@@ -1,0 +1,76 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+!.env.example
+!.env.production.example
+.env.*.local
+*.env
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+backend/venv/
+backend/.venv/
+**/venv/
+**/.venv/
+
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+**/node_modules/
+dist/
+frontend/dist/
+**/dist/
+dist-ssr/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Database & Volumes & Data
+volumes/postgres/**
+volumes/redis/**
+volumes/data/incomplete/**
+volumes/data/completed/**
+volumes/data/resume_data/**
+!volumes/data/incomplete/.gitkeep
+!volumes/data/completed/.gitkeep
+!volumes/data/resume_data/.gitkeep
+data/**
+storage/**
+downloads/**
+
+# Logs
+*.log
+logs/
+backend/logs/
+
+# Celery local beat schedule database
+celerybeat-schedule*
+*.bak
+*.dat
+*.dir
+
+# IDEs & OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Test & coverage
+.pytest_cache/
+.coverage
+htmlcov/

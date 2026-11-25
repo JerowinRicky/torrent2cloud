@@ -1,0 +1,187 @@
+services:
+  # ---------------------------------------------------------------------------
+  # Database Service (PostgreSQL 16)
+  # ---------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: cloudtorrent-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cloudtorrent_db}
+      POSTGRES_USER: ${POSTGRES_USER:-cloudtorrent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cloudtorrent_secret}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cloudtorrent} -d ${POSTGRES_DB:-cloudtorrent_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend-net
+
+  # ---------------------------------------------------------------------------
+  # Cache & Message Broker (Redis 7)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: cloudtorrent-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - backend-net
+
+  # ---------------------------------------------------------------------------
+  # FastAPI REST API & Telemetry Service
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloudtorrent-api
+    restart: unless-stopped
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-super-secret-key-change-this-in-production-min-32-chars}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cloudtorrent}:${POSTGRES_PASSWORD:-cloudtorrent_secret}@db:5432/${POSTGRES_DB:-cloudtorrent_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      STORAGE_INCOMPLETE_PATH: /data/incomplete
+      STORAGE_COMPLETED_PATH: /data/completed
+      STORAGE_RESUME_PATH: /data/resume_data
+      RUN_MIGRATIONS: "true"
+    volumes:
+      - storage_incomplete:/data/incomplete
+      - storage_completed:/data/completed
+      - storage_resume:/data/resume_data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - backend-net
+
+  # ---------------------------------------------------------------------------
+  # Background Celery Torrent Worker
+  # ---------------------------------------------------------------------------
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloudtorrent-celery-worker
+    restart: unless-stopped
+    command: ["celery", "-A", "app.core.celery_app.celery_app", "worker", "--loglevel=info", "-c", "4"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-super-secret-key-change-this-in-production-min-32-chars}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cloudtorrent}:${POSTGRES_PASSWORD:-cloudtorrent_secret}@db:5432/${POSTGRES_DB:-cloudtorrent_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      STORAGE_INCOMPLETE_PATH: /data/incomplete
+      STORAGE_COMPLETED_PATH: /data/completed
+      STORAGE_RESUME_PATH: /data/resume_data
+      RUN_MIGRATIONS: "false"
+    volumes:
+      - storage_incomplete:/data/incomplete
+      - storage_completed:/data/completed
+      - storage_resume:/data/resume_data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - backend-net
+
+  # ---------------------------------------------------------------------------
+  # Background Celery Beat Scheduler
+  # ---------------------------------------------------------------------------
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: cloudtorrent-celery-beat
+    restart: unless-stopped
+    command: ["celery", "-A", "app.core.celery_app.celery_app", "beat", "--loglevel=info"]
+    environment:
+      APP_ENV: ${APP_ENV:-production}
+      APP_SECRET_KEY: ${APP_SECRET_KEY:-dev-super-secret-key-change-this-in-production-min-32-chars}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cloudtorrent}:${POSTGRES_PASSWORD:-cloudtorrent_secret}@db:5432/${POSTGRES_DB:-cloudtorrent_db}
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      RUN_MIGRATIONS: "false"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend-net
+
+  # ---------------------------------------------------------------------------
+  # Frontend SPA Container (Nginx Alpine)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: cloudtorrent-frontend
+    restart: unless-stopped
+    networks:
+      - frontend-net
+
+  # ---------------------------------------------------------------------------
+  # Edge Reverse Proxy (Nginx)
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: cloudtorrent-nginx
+    restart: unless-stopped
+    ports:
+      - "${PORT:-80}:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - storage_completed:/data/completed:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:80/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - frontend-net
+      - backend-net
+
+networks:
+  frontend-net:
+    driver: bridge
+  backend-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  storage_incomplete:
+  storage_completed:
+  storage_resume:
